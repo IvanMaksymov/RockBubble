@@ -1,0 +1,466 @@
+MODULE BubbleMountainKing;
+
+IMPORT Math, Out;
+
+(*
+
+This software is free for non-commercial use. It is intended for
+research use by experienced workers in the feilds of computing, 
+physics and mathematics, and it includes no warranties or services.
+The author can be contacted by email ivan.maksymov [at] gmail.com.
+
+This code was successfully compled using the following Oberon compilers:
+
+1. https://github.com/vishaps/voc
+2. https://spivey.oriel.ox.ac.uk/corner/Oxford_Oberon-2_compiler
+3. http://miasap.se/obnc/ OR https://github.com/GunterMueller/OBNC
+4. https://github.com/Vostok-space/vostok
+
+For example, in Linux/Unix use the commands: voc -m BubbleMountainKing.obn && 
+./BubbleMountainKing > a.out to compile and run the program, which will
+write all data to the file called a.out.
+
+There can be minor compilation error when switched from one compiler to another,
+including an error related to the type conversion functions FLT and FLOOR. See
+the body of the code for details.
+
+The procedure rk4 was originally published in the book:
+A. E. Mudrov, Numerical Methods for Personal Computers in the BASIC, FORTRAN, and PASCAL Languages [in Russian],
+Tomsk (1991).
+
+The output file a.out is processed using the Octave (Matlab-compatible) script
+called octave_bubble.m.
+
+*)
+
+CONST
+
+	rho = 1000.0; (* kg/m^3 *)
+	Pstat = 100.0E3; (* Pa *)
+	Pv = 2.33E3; (* Pa *)
+	sigma = 0.0725; (* N m−1 *)
+	K3 = 3.0*1.33 ; (* gas polytropic exponent *)
+	(* K3 = 3.0*K; (* where K = 1.33 *) *)
+	mu = 1.6E-3; (* dynamic viscosity for water(kg/ms) *)
+	c = 1484.0;  (*speed of sound in water *) 
+	pi  = 3.141592653589793238462643383;
+	L = 65536*256;
+	Nbubl = 1; (*number of bubbles in the cluster *)
+    OscilPeriods = 2000; (*number of oscillation periods*)
+
+TYPE 
+	VECB = ARRAY 11 OF REAL;
+	VEC = ARRAY 3 OF REAL;
+	ARR = ARRAY 10,3 OF REAL;
+	OUTVEC = ARRAY 11,24000001 OF REAL;
+	MUSICNOTE = RECORD number: INTEGER; duration: REAL END;
+
+VAR
+	x, x9, h : REAL;
+	y, yold : ARR;
+	R0n, snl : VECB;
+	Pa, Paold, Pa0, DimFreq : REAL;
+	n, cnt, i, j, k, l, L1 : INTEGER;
+	R0, R0ref, thetanl, radiation : REAL;
+	Tmp : OUTVEC;
+    omega : REAL;
+    delta: REAL;
+    staff: ARRAY 101 OF MUSICNOTE; 
+
+(*Physics*)
+
+PROCEDURE rhs (x : REAL; VAR yr, fr : ARR; nb : INTEGER) ;    (*derivatives*)
+
+VAR
+	M, W, R, Me, Sigma1 : REAL;
+
+BEGIN
+	
+	(* y[1] = r, y[2] = r', f[2] = r'' *)
+
+	(*Non-dimensional form*)
+	M := (Pstat - Pv)/(rho*Math.power(omega,2.0)*Math.power(R0,2.0));
+	W := 2.0*sigma/(rho*Math.power(omega,2.0)*Math.power(R0,3.0));
+	R := 4.0*mu/(rho*omega*Math.power(R0,2.0));
+	Me := Pa0/(rho*Math.power(omega,2.0)*Math.power(R0,2.0));
+    Sigma1 := omega*R0/c;
+
+    (*x^y = exp(y*ln(abs(x)))*)
+    fr[nb][1] := yr[nb][2];
+
+    fr[nb][2] := (1.0/((1.0-Sigma1*y[nb][2])*y[nb][1] + Sigma1*R))*((Sigma1*y[nb][2]-3.0)*(Math.power(y[nb][2],2.0)/2.0) 
+      - (W+R*y[nb][2])/y[nb][1] + (M + W)*(1.0+(1.0-K3)*Sigma1*y[nb][2])/Math.exp(K3*Math.ln(ABS(yr[nb][1])))(*Math.power(y[nb][1],K3)*) 
+      - (1.0+Sigma1*y[nb][2])*(M+Me*Pa(**Math.sin(x)*)) - Me*Sigma1*((*Pa*Math.cos(x) +*) (Pa-Paold)(**Math.sin(x)*)/h) - radiation);
+
+END rhs;
+
+PROCEDURE rk4 (n : INTEGER; x, h : REAL; VAR y : ARR; nb : INTEGER; mode : CHAR); (*Runge-Kutta 4th order*)
+
+VAR
+	i, j : INTEGER;
+	h1, h2, q : REAL;
+	y0, y1 : VEC;
+	f : ARR;
+    
+BEGIN
+	
+	h1 := 0.0;
+	h2 := h/2.0;
+
+	FOR i := 1 TO n DO
+	
+		y0[i] := y[nb][i];
+		y1[i] := y[nb][i];
+	
+	END;
+	
+	FOR j := 1 TO 4 DO
+	                
+        rhs(x+h1, y, f, nb);
+
+		IF j=3 THEN
+		
+			h1 := h
+		
+		ELSE
+		
+			h1 := h2
+		
+		END;
+		
+		FOR i := 1 TO n DO
+		
+			q := h1*f[nb][i]; y[nb][i] := y0[i] + q;
+		
+			IF j=2 THEN
+			
+				q := 2.0*q
+			
+			END;
+			
+			y1[i] := y1[i] + q/3.0
+		
+		END
+	END;
+
+	FOR i := 1 TO n DO
+	
+		y[nb][i] := y1[i];
+	
+	END;	
+
+END rk4;
+
+PROCEDURE PianoKey (n: INTEGER): REAL;
+
+VAR
+retval: REAL;
+
+BEGIN
+
+    IF n > 0 THEN 
+        
+        IF n < 89 THEN
+
+            retval := Math.power(2.0,((n-49.0)/12.0))*440.0;
+            (*retval := Math.power(2.0,((FLT(n)-49.0)/12.0))*440.0;*)(*for OBNC compiler*)
+
+        ELSE
+
+            retval :=  0.0;
+
+        END;
+
+    ELSE
+
+        retval :=  0.0;
+
+    END;
+
+    RETURN retval
+
+END PianoKey;
+
+
+(* MAIN PROGRAM*)
+
+BEGIN
+
+	DimFreq := 100.0;	
+	Pa0 := 0.2*Pstat;
+	omega := 2.0*pi*DimFreq;
+
+	(*Nondimensional form*)
+	h := 2.0*pi/1200.0;
+	x := 0.0;
+
+    R0ref := 10.0E-3;(*1.0E-3 as an option*)
+
+    (*Music*)
+
+    staff[1].number := 39;
+    staff[1].duration := 0.05;
+    staff[2].number := -1;
+    staff[2].duration := 0.05;
+    staff[3].number := 41;
+    staff[3].duration := 0.05;
+    staff[4].number := -1;
+    staff[4].duration := 0.05;
+    staff[5].number := 42;
+    staff[5].duration := 0.05;
+    staff[6].number := -1;
+    staff[6].duration := 0.05;
+    staff[7].number := 44;
+    staff[7].duration := 0.05;
+    staff[8].number := -1;
+    staff[8].duration := 0.05;
+    staff[9].number := 46;
+    staff[9].duration := 0.05;
+    staff[10].number := -1;
+    staff[10].duration := 0.05;
+    staff[11].number := 42;
+    staff[11].duration := 0.05;
+    staff[12].number := -1;
+    staff[12].duration := 0.05;
+    staff[13].number := 46;
+    staff[13].duration := 0.2;
+    staff[14].number := 45;
+    staff[14].duration := 0.05;
+    staff[15].number := -1;
+    staff[15].duration := 0.05;
+    staff[16].number := 41;
+    staff[16].duration := 0.05;
+    staff[17].number := -1;
+    staff[17].duration := 0.05;
+    staff[18].number := 45;
+    staff[18].duration := 0.2;
+    staff[19].number := 44;
+    staff[19].duration := 0.05;
+    staff[20].number := -1;
+    staff[20].duration := 0.05;
+    staff[21].number := 41;
+    staff[21].duration := 0.05;
+    staff[22].number := -1;
+    staff[22].duration := 0.05;
+    staff[23].number := 44;
+    staff[23].duration := 0.2;
+    staff[24].number := 39;
+    staff[24].duration := 0.05;
+    staff[25].number := -1;
+    staff[25].duration := 0.05;
+    staff[26].number := 41;
+    staff[26].duration := 0.05;
+    staff[27].number := -1;
+    staff[27].duration := 0.05;
+    staff[28].number := 42;
+    staff[28].duration := 0.05;
+    staff[29].number := -1;
+    staff[29].duration := 0.05;
+    staff[30].number := 44;
+    staff[30].duration := 0.05;
+    staff[31].number := -1;
+    staff[31].duration := 0.05;
+    staff[32].number := 46;
+    staff[32].duration := 0.05;
+    staff[33].number := -1;
+    staff[33].duration := 0.05;
+    staff[34].number := 42;
+    staff[34].duration := 0.05;
+    staff[35].number := -1;
+    staff[35].duration := 0.05;
+    staff[36].number := 46;
+    staff[36].duration := 0.05;
+    staff[37].number := -1;
+    staff[37].duration := 0.05;
+    staff[38].number := 51;
+    staff[38].duration := 0.05;
+    staff[39].number := -1;
+    staff[39].duration := 0.05;
+    staff[40].number := 50;
+    staff[40].duration := 0.05;
+    staff[41].number := -1;
+    staff[41].duration := 0.05;
+    staff[42].number := 46;
+    staff[42].duration := 0.05;
+    staff[43].number := -1;
+    staff[43].duration := 0.05;
+    staff[44].number := 42;
+    staff[44].duration := 0.05;
+    staff[45].number := -1;
+    staff[45].duration := 0.05;
+    staff[46].number := 46;
+    staff[46].duration := 0.05;
+    staff[47].number := -1;
+    staff[47].duration := 0.05;
+    staff[48].number := 50;
+    staff[48].duration := 0.2;
+    staff[49].number := -1;
+    staff[49].duration := 0.2;
+    staff[50].number := 46;
+    staff[50].duration := 0.05;
+    staff[51].number := -1;
+    staff[51].duration := 0.05;
+    staff[52].number := 48;
+    staff[52].duration := 0.05;
+    staff[53].number := -1;
+    staff[53].duration := 0.05;
+    staff[54].number := 50;
+    staff[54].duration := 0.05;
+    staff[55].number := -1;
+    staff[55].duration := 0.05;
+    staff[56].number := 51;
+    staff[56].duration := 0.05;
+    staff[57].number := -1;
+    staff[57].duration := 0.05;
+    staff[58].number := 53;
+    staff[58].duration := 0.05;
+    staff[59].number := -1;
+    staff[59].duration := 0.05;
+    staff[60].number := 50;
+    staff[60].duration := 0.05;
+    staff[61].number := -1;
+    staff[61].duration := 0.05;
+    staff[62].number := 53;
+    staff[62].duration := 0.2;
+    staff[63].number := 54;
+    staff[63].duration := 0.05;
+    staff[64].number := -1;
+    staff[64].duration := 0.05;
+    staff[65].number := 50;
+    staff[65].duration := 0.05;
+    staff[66].number := -1;
+    staff[66].duration := 0.05;
+    staff[67].number := 54;
+    staff[67].duration := 0.2;
+    staff[68].number := 53;
+    staff[68].duration := 0.05;
+    staff[69].number := -1;
+    staff[69].duration := 0.05;
+    staff[70].number := 50;
+    staff[70].duration := 0.05;
+    staff[71].number := -1;
+    staff[71].duration := 0.05;
+    staff[72].number := 53;
+    staff[72].duration := 0.05;
+    staff[73].number := -1;
+    staff[73].duration := 0.05;
+    staff[74].number := 46;
+    staff[74].duration := 0.05;
+    staff[75].number := -1;
+    staff[75].duration := 0.05;
+    staff[76].number := 48;
+    staff[76].duration := 0.05;
+    staff[77].number := -1;
+    staff[77].duration := 0.05;
+    staff[78].number := 50;
+    staff[78].duration := 0.05;
+    staff[79].number := -1;
+    staff[79].duration := 0.05;
+    staff[80].number := 51;
+    staff[80].duration := 0.05;
+    staff[81].number := -1;
+    staff[81].duration := 0.05;
+    staff[82].number := 53;
+    staff[82].duration := 0.05;
+    staff[83].number := -1;
+    staff[83].duration := 0.05;
+    staff[84].number := 50;
+    staff[84].duration := 0.05;
+    staff[85].number := -1;
+    staff[85].duration := 0.05;
+    staff[86].number := 53;
+    staff[86].duration := 0.2;
+    staff[87].number := 54;
+    staff[87].duration := 0.05;
+    staff[88].number := -1;
+    staff[88].duration := 0.05;
+    staff[89].number := 50;
+    staff[89].duration := 0.05;
+    staff[90].number := -1;
+    staff[90].duration := 0.05;
+    staff[91].number := 54;
+    staff[91].duration := 0.2;
+    staff[92].number := 53;
+    staff[92].duration := 0.2;
+    staff[93].number := -1;
+    staff[93].duration := 0.2;
+    
+    (*Music*)
+
+	FOR n := 1 TO Nbubl DO
+
+		R0n[n] := R0ref/(*FLT*)(n);		
+        y[n][1] := R0n[n]/R0ref; y[n][2] := 0.0; (*non-dimensional*)
+        Out.String("Bubble #");Out.Int(n,2);Out.String(" R0 = ");Out.Real(R0n[n],6);Out.Ln;
+
+    END;
+
+    delta := 0.001;
+
+    FOR i := 1 TO 93 DO
+
+    	x9 := x + omega*2.0*staff[i].duration;
+
+        WHILE ((x<x9)=(h>0.0)) DO
+
+            Paold := Pa;   
+
+            Pa := (1.0/Math.arctan(1.0/delta))*Math.arctan(Math.sin(PianoKey(staff[i].number)*x/DimFreq)/delta);
+    
+		    FOR n := 1 TO Nbubl DO
+		    
+                R0 := R0n[n];
+
+                (* y[1] = r, y[2] = r' , f[2] = r'' *)
+
+	            radiation := 0.0;
+
+	            FOR l := 1 TO Nbubl DO
+
+		            IF l # n THEN
+
+                        snl[n] := 5.0*R0ref;(* m *)
+
+                        (*thetanl := 1.0/snl[n];*)
+                        thetanl := 0.0;	
+
+			            radiation := radiation + 
+                                            thetanl*(Math.power(y[l][1],2.0)*(y[l][2]-yold[l][2])/h + 2.0*y[l][1]*Math.power(y[l][2],2.0))
+
+		            END;
+
+	            END;
+
+                FOR j := 0 TO 9 DO
+                    FOR k := 0 TO 2 DO
+
+                        yold[j][k] := y[j][k];
+
+                    END;
+                END;     
+
+                rk4(2, x, h, y, n, "R");
+
+                Tmp[n][cnt] := Math.power(R0n[n],3.0)*Math.power(2.0*pi*DimFreq,2.0)*rho*(Math.power(y[n][1],2.0)*
+                                            (y[n][2]-yold[n][2])/h +2.0*y[n][1]*Math.power(y[n][2],2.0))/(1000.0*1.95E-3);
+                
+                Out.Real(x/omega,16);Out.String(" ");Out.Real(Tmp[1][cnt],16);Out.String(" ");Out.Real(Pa(**Math.sin(x)*),16);Out.Ln;
+
+
+
+		    END;(*bubble number loop*)
+	    
+		    x := x + h;
+		    (*cnt := cnt + 1;*)
+
+        END;
+			
+	END;
+
+    L1 := cnt;
+    
+    Out.Ln;
+    	
+END BubbleMountainKing.
+
+
